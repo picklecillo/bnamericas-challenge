@@ -1,0 +1,51 @@
+services:
+  frontend:
+    build:
+      context: ./frontend
+      target: dev
+    image: project-editor-frontend
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    ports:
+      - "${FRONTEND_PORT:-5173}:5173"
+    environment:
+      # Vite proxies /api here; the browser never talks to the upstream.
+      BACKEND_URL: http://backend:8000
+    depends_on:
+      - backend
+
+  backend:
+    build:
+      context: ./backend
+      target: dev
+    image: project-editor-backend
+    volumes:
+      - ./backend:/app
+      - /app/.venv
+    ports:
+      - "${BACKEND_PORT:-8000}:8000"
+    environment:
+      UPSTREAM_URL: http://upstream:8081
+      UPSTREAM_API_KEY: ${UPSTREAM_API_KEY:-local-dev-key}
+    depends_on:
+      upstream:
+        condition: service_healthy
+
+  # The records API owned by another team. Built from upstream/ untouched, and not
+  # bind-mounted: we never edit it, and its data resets on every restart anyway.
+  upstream:
+    build:
+      context: ./upstream
+      dockerfile: ../docker/upstream.Dockerfile
+    image: project-editor-upstream
+    ports:
+      - "${UPSTREAM_PORT:-8081}:8081"
+    environment:
+      UPSTREAM_SLOW_RATE: ${UPSTREAM_SLOW_RATE:-0.1}
+      UPSTREAM_TIMEOUT_RATE: ${UPSTREAM_TIMEOUT_RATE:-0.1}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8081/openapi.json')"]
+      interval: 2s
+      timeout: 5s
+      retries: 15
