@@ -1,0 +1,17 @@
+/// <reference types="vitest/config" />
+import { defineConfig } from 'vite'
+import react from '@vitejs/plugin-react'
+
+// The browser only ever talks to our backend; /api is proxied to it in dev.
+export default defineConfig({
+  plugins: [react()],
+  server: {
+    proxy: {
+      '/api': process.env.BACKEND_URL ?? 'http://127.0.0.1:8000',
+    },
+  },
+  test: {
+    environment: 'jsdom',
+    setupFiles: ['./src/test-setup.ts'],
+  },
+})
