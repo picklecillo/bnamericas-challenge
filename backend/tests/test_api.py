@@ -1,6 +1,8 @@
+import fakeredis
 import pytest
 from fastapi.testclient import TestClient
 
+from app.locks import ProjectLocks
 from app.main import create_app
 from app.upstream import UpstreamClient
 from tests.fake_upstream import FakeUpstream, wide_project
@@ -12,9 +14,15 @@ def upstream() -> FakeUpstream:
 
 
 @pytest.fixture
-def api(upstream: FakeUpstream) -> TestClient:
+def redis_server() -> fakeredis.FakeServer:
+    return fakeredis.FakeServer()
+
+
+@pytest.fixture
+def api(upstream: FakeUpstream, redis_server: fakeredis.FakeServer) -> TestClient:
     client = UpstreamClient(base_url="http://upstream", api_key="local-dev-key", transport=upstream.transport())
-    with TestClient(create_app(client)) as test_client:
+    locks = ProjectLocks(fakeredis.FakeAsyncRedis(server=redis_server), wait=0.1)
+    with TestClient(create_app(client, locks)) as test_client:
         yield test_client
 
 
@@ -165,3 +173,27 @@ def test_save_preserves_linked_companies_changed_elsewhere(api: TestClient, upst
     save(api, base, name="Renamed")
 
     assert upstream.store["P-1001"]["linked_companies"] == companies
+
+
+def test_save_is_503_while_another_save_holds_the_project(
+    api: TestClient, upstream: FakeUpstream, redis_server: fakeredis.FakeServer
+):
+    base = load(api)
+    fakeredis.FakeRedis(server=redis_server).set("lock:project:P-1001", "another-instance")
+
+    response = save(api, base, name="Renamed")
+
+    assert response.status_code == 503
+    assert upstream.puts == []
+
+
+def test_save_is_503_and_writes_nothing_when_redis_is_down(
+    api: TestClient, upstream: FakeUpstream, redis_server: fakeredis.FakeServer
+):
+    base = load(api)
+    redis_server.connected = False
+
+    response = save(api, base, name="Renamed")
+
+    assert response.status_code == 503
+    assert upstream.puts == []

@@ -6,10 +6,12 @@ upstream now holds what we sent, we are done; otherwise the next attempt merges 
 whatever is there, which never re-applies a landed write blindly or clobbers a
 concurrent one.
 
-Known gap: between our GET and PUT another writer (another instance, the nightly
-import) can still slip in and be overwritten. See DECISIONS.md.
+The whole save runs under a per-project lock (app.locks), so saves through any of our
+instances never overlap between GET and PUT. Known gap: writers that skip us (the
+nightly import) can still slip in and be overwritten. See DECISIONS.md.
 """
 
+from app.locks import ProjectLocks
 from app.merge import merge
 from app.models import Conflict, Editable, ProjectDetail, SaveRequest
 from app.upstream import UpstreamClient, UpstreamError, UpstreamTimeout
@@ -23,7 +25,14 @@ class SaveConflict(Exception):
         self.current = current
 
 
-async def save_edit(upstream: UpstreamClient, project_id: str, request: SaveRequest) -> ProjectDetail:
+async def save_edit(
+    upstream: UpstreamClient, locks: ProjectLocks, project_id: str, request: SaveRequest
+) -> ProjectDetail:
+    async with locks.hold(project_id):
+        return await _save(upstream, project_id, request)
+
+
+async def _save(upstream: UpstreamClient, project_id: str, request: SaveRequest) -> ProjectDetail:
     current = await upstream.get_project(project_id)
     for _ in range(MAX_ATTEMPTS):
         result = merge(base=request.base, theirs=Editable.model_validate(current), yours=request.yours)

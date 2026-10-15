@@ -3,6 +3,7 @@
 Served through httpx.MockTransport, so tests are deterministic and never touch upstream/.
 """
 
+import asyncio
 import copy
 import json
 from collections.abc import Callable
@@ -42,6 +43,8 @@ class FakeUpstream:
         # Runs just before a PUT is applied: lets a test play a concurrent writer.
         self.before_put: Callable[[], None] | None = None
         self.down = False
+        # Seconds every GET of one project waits before answering, so concurrent saves overlap.
+        self.get_delay = 0.0
 
     def transport(self) -> httpx.MockTransport:
         return httpx.MockTransport(self.handle)
@@ -50,7 +53,7 @@ class FakeUpstream:
         """Write straight to the store, like another editor or the nightly import."""
         self.store[project_id].update(copy.deepcopy(fields))
 
-    def handle(self, request: httpx.Request) -> httpx.Response:
+    async def handle(self, request: httpx.Request) -> httpx.Response:
         if self.down:
             raise httpx.ConnectError("upstream down", request=request)
         if request.headers.get("X-Api-Key") != API_KEY:
@@ -65,7 +68,10 @@ class FakeUpstream:
             return httpx.Response(404, json={"detail": f"Project {project_id} not found"})
 
         if request.method == "GET":
-            return httpx.Response(200, json=self.store[project_id])
+            snapshot = copy.deepcopy(self.store[project_id])
+            if self.get_delay:
+                await asyncio.sleep(self.get_delay)
+            return httpx.Response(200, json=snapshot)
 
         if request.method == "PUT":
             body = json.loads(request.content)

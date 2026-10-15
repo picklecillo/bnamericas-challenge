@@ -7,7 +7,11 @@ record when the run ends. A missing label was silently overwritten by a concurre
 save inside the GET→PUT window (DECISIONS.md, risk 1).
 
 Saves that end in 502 are tracked separately: after repeated upstream 504s nobody
-knows whether they landed, so they cannot count as lost.
+knows whether they landed, so they cannot count as lost. Saves that end in 503 waited
+too long for another save of the same project to finish; nothing was written.
+
+Production runs several backend instances behind a load balancer. To play that, set
+BACKEND_HOSTS to a comma-separated list of base URLs: each request picks one at random.
 
 Run it single-process (no --processes / distributed mode): the ledger lives in memory.
 The process exits 1 if any confirmed save was lost, 0 otherwise.
@@ -25,6 +29,7 @@ from locust.runners import WorkerRunner
 
 HOT_PROJECTS = int(os.environ.get("HOT_PROJECTS", "2"))
 EDITABLE_FIELDS = ("name", "sector", "country", "stage", "key_dates")
+BACKEND_HOSTS = [h.rstrip("/") for h in os.environ.get("BACKEND_HOSTS", "").split(",") if h]
 
 # Scopes labels to this run, so runs against an upstream that was not restarted do not mix.
 RUN_ID = uuid.uuid4().hex[:6]
@@ -32,6 +37,7 @@ RUN_ID = uuid.uuid4().hex[:6]
 hot_ids: list[str] = []
 confirmed: dict[str, set[str]] = defaultdict(set)  # project id -> labels saved with 200
 ambiguous: dict[str, set[str]] = defaultdict(set)  # project id -> labels whose save gave 502
+busy: dict[str, int] = defaultdict(int)  # project id -> saves refused with 503
 lost_total = 0
 
 
@@ -52,7 +58,7 @@ class Editor(HttpUser):
     @task
     def add_key_date(self):
         project_id = random.choice(hot_ids)
-        loaded = self.client.get(f"/api/projects/{project_id}", name="/api/projects/[id]")
+        loaded = self.client.get(f"{_instance()}/api/projects/{project_id}", name="/api/projects/[id]")
         if not loaded.ok:
             return
         base = {field: loaded.json()[field] for field in EDITABLE_FIELDS}
@@ -61,7 +67,7 @@ class Editor(HttpUser):
         yours = base | {"key_dates": base["key_dates"] + [{"label": label, "date": new_date}]}
 
         with self.client.put(
-            f"/api/projects/{project_id}",
+            f"{_instance()}/api/projects/{project_id}",
             json={"base": base, "yours": yours},
             name="/api/projects/[id] (save)",
             catch_response=True,
@@ -73,6 +79,8 @@ class Editor(HttpUser):
                     saved.failure("200 response does not contain the added key date")
             elif saved.status_code == 502:
                 ambiguous[project_id].add(label)
+            elif saved.status_code == 503:
+                busy[project_id] += 1
             elif saved.status_code == 409:
                 saved.failure("unexpected conflict: adds of distinct labels should always merge")
 
@@ -84,7 +92,7 @@ def report(environment, **kwargs):
         return
 
     print(f"\n=== race detector, run {RUN_ID} ===")
-    print(f"{'project':<12}{'confirmed':>10}{'lost':>7}{'lost %':>8}{'502s':>7}{'502s landed':>13}")
+    print(f"{'project':<12}{'confirmed':>10}{'lost':>7}{'lost %':>8}{'502s':>7}{'502s landed':>13}{'503s':>7}")
     total_confirmed = 0
     for project_id in hot_ids:
         present = _labels_on_record(environment.host, project_id)
@@ -95,7 +103,7 @@ def report(environment, **kwargs):
         rate = 100 * len(lost) / len(confirmed[project_id]) if confirmed[project_id] else 0.0
         print(
             f"{project_id:<12}{len(confirmed[project_id]):>10}{len(lost):>7}{rate:>7.1f}%"
-            f"{len(ambiguous[project_id]):>7}{len(landed):>13}"
+            f"{len(ambiguous[project_id]):>7}{len(landed):>13}{busy[project_id]:>7}"
         )
     rate = 100 * lost_total / total_confirmed if total_confirmed else 0.0
     print(f"\n{lost_total} of {total_confirmed} confirmed saves were silently lost ({rate:.1f}%).")
@@ -103,7 +111,7 @@ def report(environment, **kwargs):
 
 @events.quitting.add_listener
 def exit_code(environment, **kwargs):
-    # Only lost updates fail the run. 502s are the backend working as designed.
+    # Only lost updates fail the run. 502s and 503s are the backend working as designed.
     if not isinstance(environment.runner, WorkerRunner):
         environment.process_exit_code = 1 if lost_total else 0
 
@@ -116,3 +124,8 @@ def _labels_on_record(host: str, project_id: str) -> set[str]:
             return {kd["label"] for kd in response.json()["key_dates"]}
     response.raise_for_status()
     return set()
+
+
+def _instance() -> str:
+    # Empty means "the --host", which Locust prepends to relative paths.
+    return random.choice(BACKEND_HOSTS) if BACKEND_HOSTS else ""
