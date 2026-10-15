@@ -9,6 +9,7 @@ How I used AI on this challenge. The session logs in this folder record each pro
 | [03](session-03-frontend.md) | React + MUI frontend: list, edit form, conflict dialog |
 | [04](session-04-docker-makefile.md) | Docker Compose and Makefile for local development |
 | [05](session-05-decisions-readme.md) | `DECISIONS.md` and README |
+| [06](session-06-locust-race-detector.md) | Locust race detector: measures lost updates in the save path |
 
 ## Tooling setup
 
@@ -46,3 +47,4 @@ From there Claude carried the implementation, following the global TDD skill: a 
   - A deliberately broken retry, to make sure the concurrency tests weren't passing vacuously.
   - A check of the duplicate-label failure mode before claiming it in `DECISIONS.md`.
   - The test suites run inside the containers.
+  - A Locust race detector against the running stack, which measured about 10–15% lost updates on a single backend instance (session 06).
