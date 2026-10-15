@@ -96,7 +96,7 @@ ai-trail/   session-by-session log of how the AI tooling was set up and used
 
 ## What does not, or is not built
 
-- **A narrower race window remains.** Saves through our backend now take a per-project lock in Redis, so they no longer overwrite each other: the race detector went from 13% of confirmed saves lost to 0. The nightly import skips our backend, so a write from it that lands between our read and our write can still be overwritten. Under heavy contention some saves wait up to 10 s and get a `503` ("try again"). The race detector has not yet been run against several instances. See `DECISIONS.md`.
+- **A narrower race window remains.** Saves through our backend now take a per-project lock in Redis, so they no longer overwrite each other: the race detector went from 13% of confirmed saves lost to 0, on one instance and on three. The nightly import skips our backend, so a write from it that lands between our read and our write can still be overwritten. Under heavy contention some saves wait up to 10 s and get a `503` ("try again"): 10% of saves in the race test across three instances. See `DECISIONS.md`.
 - **Bad import data.** A record with duplicate key date labels, which the nightly import could write, fails validation, and its edit page shows an error.
 - **Not built:** editing linked companies, user identity ("someone else changed…" never says who), pagination and caching of the list, live updates of an open record, a warning when leaving with unsaved changes, and a production build or deploy. The Docker setup is for development only.
 

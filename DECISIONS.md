@@ -34,10 +34,13 @@ A save that already landed is never applied twice blindly, and a write that slip
 
 **One save at a time per project, with a lock in Redis** (`backend/app/locks.py`). The merge protects edits that landed *before* our read. It cannot protect a save that lands between our GET and our PUT: our PUT resends the whole record, so it silently overwrites that save. At first I accepted this gap (see "What I cut"). Measuring it changed my mind:
 
-| `make race`: 20 editors, 2 projects, 1 instance, slow GETs and 504s on | Confirmed saves | Lost | Refused (`503`) |
+| `make race`: 20 editors, 2 projects, slow GETs and 504s on | Confirmed saves | Lost | Refused (`503`) |
 |---|---|---|---|
-| Without the lock (20 s run) | 531 | 70 (13.2%) | — |
-| With the lock (30 s run) | 133 | **0** | 7 of 140 saves (5%) |
+| Without the lock, 1 instance (20 s run) | 531 | 70 (13.2%) | — |
+| With the lock, 1 instance (30 s run) | 133 | **0** | 7 of 140 saves (5%) |
+| With the lock, 3 instances on one Redis (30 s run) | 155 | **0** | 17 of 172 saves (10%) |
+
+In the 3-instance run, each request went to one of three backends at random. Their logs show 58, 58 and 56 saves, so the lock really was shared across all three.
 
 A 13% silent loss is too much to leave as a documented gap. It also comes entirely from our own saves racing each other, which a lock can stop. The import, which a lock cannot stop, runs once a night. So the lock fixes the part that hurts and leaves only a small gap.
 
@@ -52,7 +55,7 @@ How it works:
 
 What it costs:
 
-- **Saves are slower under contention.** They now queue per project, and each one includes the upstream's ~2 s slow GETs and the 504 retries. With the lock, median save time was 2.1 s, p95 10 s and the slowest 12 s. With 20 people saving the same 2 projects nonstop, 5% hit the 10 s cap. Real editors save far less often.
+- **Saves are slower under contention.** They now queue per project, and each one includes the upstream's ~2 s slow GETs and the 504 retries. With the lock, median save time was about 2 s (2.1 s on one instance, 1.9 s on three), p95 10 s and the slowest 12 s. With 20 people saving the same 2 projects nonstop, 5% of saves hit the 10 s cap on one instance and 10% on three. Spread across three backends, the same editors keep more saves waiting at once. Real editors save far less often.
 - **A new piece of infrastructure.** Redis is added to `docker-compose.yml`, and the backend needs `REDIS_URL`.
 
 What it does not cover:
@@ -74,6 +77,6 @@ What it does not cover:
 
 ## What breaks first with 50 editors
 
-1. **Waiting for saves on hot projects.** The Redis lock stopped lost updates (`make race`: 0 of 133 lost, down from 13%). The cost is that saves to the same project now queue. Each save holds the lock for one upstream read plus write, ~2 s when the upstream's GET is slow and more with 504 retries. With 50 editors on a few hot projects, saves wait longer and more of them hit the 10 s cap and get a `503`. This failure is **visible**, unlike the lost update it replaced. Next steps: run `make race` with `BACKEND_HOSTS` set across three instances (not done yet), retry once in the form before showing the `503`, and ask the upstream team for a version field or `If-Match`. That would let us replace the lock with a conditional PUT, which also covers the import.
+1. **Waiting for saves on hot projects.** The Redis lock stopped lost updates (`make race`: 0 lost on one instance and on three, down from 13%). The cost is that saves to the same project now queue. Each save holds the lock for one upstream read plus write, ~2 s when the upstream's GET is slow and more with 504 retries. The harsh race test already refuses 10% of saves with `503` on three instances. With 50 editors on a few hot projects, saves wait longer and more of them hit the 10 s cap. This failure is **visible**, unlike the lost update it replaced. Next steps: retry once in the form before showing the `503`, and ask the upstream team for a version field or `If-Match`. That would let us replace the lock with a conditional PUT, which also covers the import.
 2. **The list endpoint.** `GET /projects` returns every project in full, and every list view calls it. At thousands of records and 50 editors that is a lot of wide payloads. Next step: a short-TTL cache of the list summaries (staleness is fine there, since saves merge against fresh data anyway), then server-side search and pagination.
 3. **Bad data from the import.** If the import writes duplicate key date labels, our per-label model rejects that record, and the edit page fails for it. Next step: decide how to show such records (read-only with a warning, or merge the duplicates).
