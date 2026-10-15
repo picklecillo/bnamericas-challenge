@@ -90,8 +90,65 @@ Reading `upstream/` and running it locally (per `upstream/README.md`) is fine.
 
 - Wrote this file: `ai-trail/session-01-upstream-guardrails.md`.
 
+---
+
+## Prompt 4
+
+> commit this
+
+### What Claude did
+
+- Was on `main`, so created branch `chore/upstream-guardrails` first (its default rule: branch before committing on the default branch).
+- Committed `CLAUDE.md`, `.claude/settings.json`, `.claude/hooks/protect-upstream.sh` and this log as `4368ec9 chore: guard upstream API against modification`. Not pushed.
+
+### Output
+
+> I committed all four files as `4368ec9` on a new branch, `chore/upstream-guardrails`, rather than on `main`. [...] To put it straight on `main` instead, run `git switch main && git merge chore/upstream-guardrails`.
+
+---
+
+## Prompt 5
+
+> merged
+
+### Output
+
+> Good, the guardrails are on `main` now. You can delete the old branch with `git branch -d chore/upstream-guardrails`. [...] Still open from before: shell commands can write to `upstream/` without being blocked, and the hook hasn't been checked in a live session.
+
+---
+
+## Prompt 6
+
+> add the bash hook too
+
+### What Claude did
+
+- Read `.gitignore` and `upstream/README.md` to find which commands must keep working: `uv run upstream` and `uv run pytest` (their `.venv/` and `.pytest_cache/` outputs are gitignored).
+- Created `.claude/hooks/protect-upstream-bash.py` and registered it in `.claude/settings.json` as a `PreToolUse` hook on `Bash` (run with `python3 -I`).
+- Heuristic: if the command names `upstream` or runs from inside `upstream/`, and also contains a file-changing operation, block it (exit 2). File-changing operations: `>`/`>>` redirection (not `2>&1` or `/dev/null`), `rm`/`mv`/`cp`/`touch`/`tee` and similar, `sed -i`/`perl -i`, `find -delete`/`-exec`, `uv add`/`remove`/`lock`/`--upgrade`, formatters and auto-fix, and git commands that rewrite files.
+- Tested with a script of 18 cases (kept outside the repo so the test command itself would not trip the hook). 18/18 passed:
+
+| Expected | Commands |
+|---|---|
+| allowed | `cd upstream && uv run upstream`, `uv run pytest 2>&1`, `uv run upstream` from inside `upstream/`, `cat`/`grep` on upstream, `> /dev/null`, `rm` and `>` outside upstream |
+| blocked | `sed -i` (from root and from inside `upstream/`), `>>` into upstream, `rm upstream/uv.lock`, `uv add`, `uv lock --upgrade`, `ruff format upstream`, `git checkout -- upstream/...`, `find upstream ... -delete`, `cp` into upstream |
+
+### Output (summary)
+
+> Added the Bash hook; 18/18 test cases passed. Known limits: word-based matching, so some safe commands get blocked (`uv run upstream > server.log`, `cp` out of `upstream/`; Claude is told to ask the user to run those), and writes hidden inside scripts (`python -c "open(...,'w')"`, a `.sh` file) are not caught. `CLAUDE.md` remains the main defence there.
+
+---
+
+## Prompt 7
+
+> update the log and commit. but remain on the main branch
+
+### What Claude did
+
+- Added prompts 4 to 7 to this log.
+- Committed the Bash hook, the `settings.json` change and this log directly on `main`, as asked.
+
 ## Open items
 
-- Shell commands (`Bash`) that write to `upstream/` are still unguarded.
-- The hook hasn't been checked inside a live session (`/hooks`).
-- Nothing committed yet.
+- Neither hook has been checked inside a live session (`/hooks`).
+- Bash hook limits listed under prompt 6.
