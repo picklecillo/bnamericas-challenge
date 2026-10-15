@@ -10,6 +10,7 @@ How I used AI on this challenge. The session logs in this folder record each pro
 | [04](session-04-docker-makefile.md) | Docker Compose and Makefile for local development |
 | [05](session-05-decisions-readme.md) | `DECISIONS.md` and README |
 | [06](session-06-locust-race-detector.md) | Locust race detector: measures lost updates in the save path |
+| [07](session-07-redis-save-lock.md) | Per-project save lock in Redis, chosen from the race test: 13% lost → 0 |
 
 ## Tooling setup
 
@@ -30,7 +31,7 @@ How I used AI on this challenge. The session logs in this folder record each pro
 Before each coding step I asked Claude to raise clarifying questions. Its proposals came with options. The decisions were mine:
 
 - **What "the same field" means for key dates:** each label is one field (session 02).
-- **How the GET→PUT race across instances is handled:** accept it and document it, no distributed lock (session 02).
+- **How the GET→PUT race across instances is handled:** accept it and document it, no distributed lock (session 02). I reversed this once the race detector put a number on the loss: a per-project lock in Redis (sessions 06–07).
 - **Linked companies:** pass-through only, not editable (session 02).
 - **How a conflict is resolved in the UI:** an explicit theirs/mine pick per field, with no default (session 03).
 - **Key date labels, layout and test scope for the frontend** (session 03).
