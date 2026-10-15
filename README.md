@@ -54,6 +54,18 @@ cd frontend && npm test
 - **Backend (22 tests):** the three-way merge rules and the API against a fake upstream: list, detail, 404, concurrent saves on different fields and on the same field, 504s that did and did not land, and the upstream being down.
 - **Frontend (8 tests):** the client-side rebase after a conflict, plus the edit page flow: save, conflict dialog with no default pick, resubmit, and error display.
 
+## Race detector
+
+`loadtest/` holds a [Locust](https://locust.io) run that measures the lost-update gap described in `DECISIONS.md`. With the stack running:
+
+```sh
+make race                          # 20 editors, 30 s, against http://localhost:8000
+make race args="-u 50 -t 60s"      # any Locust flags
+HOT_PROJECTS=1 make race           # how many projects the editors pile onto (default 2)
+```
+
+Each simulated editor loads a hot project and adds a key date with a unique label. Adds of distinct labels never conflict, so every save answered with `200` must still be on the record at the end. The report counts the ones that are missing; saves that ended in `502` are listed apart, since nobody knows whether they landed. The run exits `1` if any confirmed save was lost.
+
 ## Layout
 
 ```
@@ -66,6 +78,7 @@ frontend/   Vite + React + TypeScript + MUI
   src/api.ts        the only module that does HTTP (all under /api)
   src/rebase.ts     rebuilds an edit on top of the current record after a 409
   src/pages/        project list, project edit form
+loadtest/   Locust race detector for the save path
 docker/     upstream image (kept outside upstream/)
 upstream/   the records API, owned by another team. Read-only for us
 ai-trail/   session-by-session log of how the AI tooling was set up and used
@@ -80,7 +93,7 @@ ai-trail/   session-by-session log of how the AI tooling was set up and used
 
 ## What does not, or is not built
 
-- **A race window remains.** A write from another backend instance or the nightly import that lands between our read and our write is overwritten. Closing it needs support from the upstream. See `DECISIONS.md`.
+- **A race window remains.** Any write that lands between our read and our write is overwritten: another save on the same backend instance, another instance, or the nightly import. The race detector loses about 10–15% of confirmed saves with 20 editors on 2 projects and a single instance. Closing it needs support from the upstream. See `DECISIONS.md`.
 - **Bad import data.** A record with duplicate key date labels, which the nightly import could write, fails validation, and its edit page shows an error.
 - **Not built:** editing linked companies, user identity ("someone else changed…" never says who), pagination and caching of the list, live updates of an open record, a warning when leaving with unsaved changes, and a production build or deploy. The Docker setup is for development only.
 
